@@ -50,14 +50,24 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
   const [gameKey, setGameKey] = useState(0);
   /** A different mode was requested while a game is running. */
   const [conflictMode, setConflictMode] = useState<GameMode | null>(null);
+  /** The user ended the current game and is looking at its summary. */
+  const [finished, setFinished] = useState(false);
 
   useEffect(() => {
     if (!isMode(requestedMode)) return;
     if (step === 'play') {
-      if (requestedMode !== mode) setConflictMode(requestedMode);
+      // A finished game needs no confirmation: go straight to a new setup.
+      if (finished) {
+        setMode(requestedMode);
+        setStep('setup');
+      } else if (requestedMode !== mode) setConflictMode(requestedMode);
     } else setMode(requestedMode);
     // Only react to a new request, not to the step changing.
   }, [requestedMode]);
+
+  useEffect(() => {
+    if (step !== 'play') setFinished(false);
+  }, [step]);
 
   useEffect(() => {
     onGameAliveChange(step === 'play');
@@ -183,6 +193,7 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
         occupants={occupants}
         userSeat={userSeat!}
         visible={visible}
+        onFinishedChange={setFinished}
         onNewGame={() => setStep('setup')}
       />
       {conflictMode && visible && (
@@ -235,10 +246,11 @@ interface GameTableProps {
   occupants: Record<number, Occupant>;
   userSeat: number;
   visible: boolean;
+  onFinishedChange: (finished: boolean) => void;
   onNewGame: () => void;
 }
 
-function GameTable({ mode, occupants, userSeat, visible, onNewGame }: GameTableProps) {
+function GameTable({ mode, occupants, userSeat, visible, onFinishedChange, onNewGame }: GameTableProps) {
   const { profile, updateSettings } = useStore();
   const settings = profile.settings;
   const c = useTableController(mode, occupants, userSeat);
@@ -286,6 +298,7 @@ function GameTable({ mode, occupants, userSeat, visible, onNewGame }: GameTableP
   const finish = () => {
     ended.current = true;
     setGameOver(c.endGame());
+    onFinishedChange(true);
   };
 
   // The controls bar sticks to the bottom of the screen; publish its height so the
@@ -500,6 +513,7 @@ function GameTable({ mode, occupants, userSeat, visible, onNewGame }: GameTableP
           onClose={() => {
             ended.current = false;
             setGameOver(null);
+            onFinishedChange(false);
           }}
         />
       )}

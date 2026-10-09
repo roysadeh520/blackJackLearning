@@ -109,7 +109,10 @@ async function playHands(page, n, tag, shotEvery = 99) {
 async function openMode(page, mode) {
   await page.goto(`${BASE}#/play?mode=${mode}`);
   const conflict = page.getByRole('button', { name: 'התחל משחק חדש' });
-  if (await conflict.isVisible().catch(() => false)) await conflict.click();
+  const setup = page.getByRole('button', { name: 'המשך לבחירת מקום' });
+  await conflict.or(setup).first().waitFor({ timeout: 10000 });
+  if (await conflict.isVisible()) await conflict.click();
+  await setup.waitFor();
 }
 
 const browser = await chromium.launch({ executablePath: EXEC });

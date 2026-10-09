@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pickVirtualPlayers } from '../../bots/virtualPlayers';
 import { BlackjackEngine, SEAT_COUNT } from '../../engine/game';
 import { DEFAULT_RULES } from '../../engine/rules';
@@ -16,7 +16,9 @@ import {
   InsurancePanel,
 } from '../components/TablePanels';
 import { roundHistory, totalText } from '../format';
-import { Occupant, SessionStats, useTableController } from '../hooks/useTableController';
+import { clearActiveGame, loadActiveGame, saveActiveGame } from '../activeGame';
+import { Occupant, SavedTable, SessionStats, useTableController } from '../hooks/useTableController';
+import { sessionResult } from '../../stats/session';
 import { navigate } from '../router';
 import { useStore } from '../store';
 
@@ -41,12 +43,14 @@ interface PlayScreenProps {
 }
 
 export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlayScreenProps) {
-  const { profile, updateProfile } = useStore();
-  const [mode, setMode] = useState<GameMode>(isMode(requestedMode) ? requestedMode : 'learn');
+  const { profile, updateProfile, storage } = useStore();
+  // A table saved before a refresh is reopened exactly as it was.
+  const [restore, setRestore] = useState<SavedTable | undefined>(() => loadActiveGame(storage));
+  const [mode, setMode] = useState<GameMode>(restore?.mode ?? (isMode(requestedMode) ? requestedMode : 'learn'));
   const [players, setPlayers] = useState(Math.min(Math.max(profile.lastPlayers, 1), SEAT_COUNT));
-  const [step, setStep] = useState<'setup' | 'seat' | 'play'>('setup');
-  const [userSeat, setUserSeat] = useState<number | null>(null);
-  const [occupants, setOccupants] = useState<Record<number, Occupant>>({});
+  const [step, setStep] = useState<'setup' | 'seat' | 'play'>(restore ? 'play' : 'setup');
+  const [userSeat, setUserSeat] = useState<number | null>(restore?.userSeat ?? null);
+  const [occupants, setOccupants] = useState<Record<number, Occupant>>(restore?.occupants ?? {});
   const [gameKey, setGameKey] = useState(0);
   /** A different mode was requested while a game is running. */
   const [conflictMode, setConflictMode] = useState<GameMode | null>(null);
@@ -66,8 +70,12 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
   }, [requestedMode]);
 
   useEffect(() => {
-    if (step !== 'play') setFinished(false);
-  }, [step]);
+    if (step !== 'play') {
+      setFinished(false);
+      setRestore(undefined);
+      clearActiveGame(storage);
+    }
+  }, [step, storage]);
 
   useEffect(() => {
     onGameAliveChange(step === 'play');
@@ -189,6 +197,7 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
     <>
       <GameTable
         key={gameKey}
+        restore={restore}
         mode={mode}
         occupants={occupants}
         userSeat={userSeat!}
@@ -242,6 +251,7 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
 // ---------------------------------------------------------------------------
 
 interface GameTableProps {
+  restore?: SavedTable;
   mode: GameMode;
   occupants: Record<number, Occupant>;
   userSeat: number;
@@ -250,12 +260,15 @@ interface GameTableProps {
   onNewGame: () => void;
 }
 
-function GameTable({ mode, occupants, userSeat, visible, onFinishedChange, onNewGame }: GameTableProps) {
+function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChange, onNewGame }: GameTableProps) {
   const { profile, updateSettings } = useStore();
   const settings = profile.settings;
-  const c = useTableController(mode, occupants, userSeat);
+  const { storage } = useStore();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [gameOver, setGameOver] = useState<(SessionStats & { endChips: number }) | null>(null);
+  const onSave = useCallback((g: SavedTable) => saveActiveGame(storage, g), [storage]);
+  // A game that was ended is not saved; closing its summary to play on saves it again.
+  const c = useTableController(mode, occupants, userSeat, { restore, onSave, persist: !gameOver });
   const [coachDismissed, setCoachDismissed] = useState<string | null>(null);
   const ended = useRef(false);
   const endGameRef = useRef(c.endGame);
@@ -298,6 +311,7 @@ function GameTable({ mode, occupants, userSeat, visible, onFinishedChange, onNew
   const finish = () => {
     ended.current = true;
     setGameOver(c.endGame());
+    clearActiveGame(storage);
     onFinishedChange(true);
   };
 
@@ -532,7 +546,7 @@ function GameSummaryModal({
   onNewGame: () => void;
   onClose: () => void;
 }) {
-  const net = stats.endChips - stats.startChips;
+  const net = sessionResult(stats, stats.endChips);
   return (
     <Modal
       title="סיכום המשחק"
@@ -560,6 +574,9 @@ function GameSummaryModal({
         <div><dt>טעויות</dt><dd>{stats.mistakes}</dd></div>
         <div><dt>אחוז דיוק</dt><dd>{percent(stats.correct, stats.decisions)}</dd></div>
         <div><dt>צ׳יפים בתחילת המשחק</dt><dd>{formatChips(stats.startChips)}</dd></div>
+        {stats.chipsAdded > 0 && (
+          <div><dt>צ׳יפים שקיבלת במהלך המשחק (לא נספרים כרווח)</dt><dd>{formatChips(stats.chipsAdded)}</dd></div>
+        )}
         <div><dt>צ׳יפים בסיום</dt><dd>{formatChips(stats.endChips)}</dd></div>
         <div><dt>רווח או הפסד</dt><dd className={net >= 0 ? 'pos' : 'neg'}>{formatSigned(net)}</dd></div>
       </dl>

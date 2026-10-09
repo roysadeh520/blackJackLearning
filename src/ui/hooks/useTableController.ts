@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { botTakesInsurance, BOT_START_CHIPS, chooseBotAction, chooseBotBet, VirtualPlayer } from '../../bots/virtualPlayers';
 import { handValue } from '../../engine/cards';
-import { Action, BlackjackEngine, HandOutcome, TableSnapshot } from '../../engine/game';
+import { Action, BlackjackEngine, EngineState, HandOutcome, TableSnapshot } from '../../engine/game';
 import { DEFAULT_RULES } from '../../engine/rules';
 import { playSound } from '../../media/sound';
 import { DecisionGrade, gradeDecision, recommend, Recommendation } from '../../strategy/basicStrategy';
@@ -16,6 +16,15 @@ import {
   recordSession,
   START_CHIPS,
 } from '../../stats/profile';
+import {
+  addDecision,
+  addHandResult,
+  addInsuranceDecision,
+  addRefill,
+  emptySession,
+  RoundDecision,
+  SessionStats,
+} from '../../stats/session';
 import { useStore } from '../store';
 
 export type Occupant = { kind: 'human' } | { kind: 'bot'; bot: VirtualPlayer };
@@ -30,14 +39,6 @@ export interface Feedback {
   pending: boolean;
 }
 
-export interface RoundDecision {
-  rec: Recommendation;
-  chosen: Action;
-  grade: DecisionGrade;
-  cards: string[];
-  dealerUp: string;
-}
-
 export interface HandSummary {
   outcomes: HandOutcome[];
   net: number;
@@ -45,15 +46,36 @@ export interface HandSummary {
   insuranceTaken: boolean | null;
 }
 
-export interface SessionStats {
-  startChips: number;
-  hands: number;
-  decisions: number;
-  correct: number;
-  minor: number;
-  mistakes: number;
-  net: number;
-  mistakeList: RoundDecision[];
+export type { RoundDecision, SessionStats };
+
+/** A game in progress, saved so a page refresh returns to the same table. */
+export interface SavedTable {
+  v: 1;
+  savedAt: number;
+  mode: GameMode;
+  occupants: Record<number, Occupant>;
+  userSeat: number;
+  engine: EngineState;
+  stage: Stage;
+  pendingBet: number;
+  feedback: Feedback | null;
+  summary: HandSummary | null;
+  session: SessionStats;
+  message: string;
+  hideTipsSession: boolean;
+  roundDecisions: RoundDecision[];
+  insuranceTaken: boolean | null;
+  gradedPoints: string[];
+}
+
+/** Stages that were mid-animation when saved; play resumes automatically. */
+const IN_FLIGHT: Stage[] = ['dealing', 'othersTurn', 'dealerTurn'];
+
+interface ControllerOptions {
+  restore?: SavedTable;
+  /** Called with the full table state after every change (when persisting is on). */
+  onSave?: (state: SavedTable) => void;
+  persist?: boolean;
 }
 
 const SPEED_FACTOR = { normal: 1, fast: 0.5, veryFast: 0.2 } as const;
@@ -61,17 +83,21 @@ const BASE = { dealCard: 230, bot: 850, dealer: 750, settle: 350 };
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
-function emptySession(startChips: number): SessionStats {
-  return { startChips, hands: 0, decisions: 0, correct: 0, minor: 0, mistakes: 0, net: 0, mistakeList: [] };
-}
-
-export function useTableController(mode: GameMode, occupants: Record<number, Occupant>, userSeat: number) {
+export function useTableController(
+  mode: GameMode,
+  occupants: Record<number, Occupant>,
+  userSeat: number,
+  { restore, onSave, persist = true }: ControllerOptions = {},
+) {
   const { profile, updateProfile, updateStats, toast } = useStore();
   const settings = profile.settings;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
   const engineRef = useRef<BlackjackEngine>(null as unknown as BlackjackEngine);
+  if (!engineRef.current && restore) {
+    engineRef.current = BlackjackEngine.restore(restore.engine, DEFAULT_RULES);
+  }
   if (!engineRef.current) {
     const e = new BlackjackEngine(DEFAULT_RULES);
     for (const [k, occ] of Object.entries(occupants)) {
@@ -84,20 +110,22 @@ export function useTableController(mode: GameMode, occupants: Record<number, Occ
   const engine = engineRef.current;
 
   const [snap, setSnap] = useState<TableSnapshot>(() => engine.snapshot());
-  const [stage, setStage] = useState<Stage>('betting');
-  const [pendingBet, setPendingBet] = useState(0);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [summary, setSummary] = useState<HandSummary | null>(null);
-  const [session, setSession] = useState<SessionStats>(() => emptySession(profile.chips));
-  const [message, setMessage] = useState('בחרו סכום הימור ולחצו על ״אשר הימור״.');
-  const [hideTipsSession, setHideTipsSession] = useState(false);
+  const [stage, setStage] = useState<Stage>(restore?.stage ?? 'betting');
+  const [pendingBet, setPendingBet] = useState(restore?.pendingBet ?? 0);
+  const [feedback, setFeedback] = useState<Feedback | null>(restore?.feedback ?? null);
+  const [summary, setSummary] = useState<HandSummary | null>(restore?.summary ?? null);
+  const [session, setSession] = useState<SessionStats>(() =>
+    restore ? { ...emptySession(restore.session.startChips), ...restore.session } : emptySession(profile.chips),
+  );
+  const [message, setMessage] = useState(restore?.message ?? 'בחרו סכום הימור ולחצו על ״אשר הימור״.');
+  const [hideTipsSession, setHideTipsSession] = useState(restore?.hideTipsSession ?? false);
 
   const alive = useRef(true);
   const busy = useRef(false);
-  const roundDecisions = useRef<RoundDecision[]>([]);
-  const insuranceTaken = useRef<boolean | null>(null);
+  const roundDecisions = useRef<RoundDecision[]>(restore?.roundDecisions ?? []);
+  const insuranceTaken = useRef<boolean | null>(restore?.insuranceTaken ?? null);
   /** Decision points already graded (practice retries are not double counted). */
-  const gradedPoints = useRef(new Set<string>());
+  const gradedPoints = useRef(new Set<string>(restore?.gradedPoints ?? []));
 
   useEffect(() => {
     alive.current = true;
@@ -144,7 +172,7 @@ export function useTableController(mode: GameMode, occupants: Record<number, Occ
     setMessage('');
     updateProfile((p) => ({ ...p, chips: seat.chips }));
     updateStats((st) => recordHandResult(st, outcomes, net));
-    setSession((ss) => ({ ...ss, hands: ss.hands + 1, net: ss.net + net }));
+    setSession((ss) => addHandResult(ss, net));
     if (outcomes.includes('blackjack')) playSound('blackjack');
     else if (net > 0) playSound('win');
     else if (net < 0) playSound('lose');
@@ -286,11 +314,11 @@ export function useTableController(mode: GameMode, occupants: Record<number, Occ
   }, [engine, userSeat, profile.lastBet]);
 
   const refillChips = useCallback(() => {
-    const added = START_CHIPS - engine.getSeat(userSeat).chips;
+    const before = engine.getSeat(userSeat).chips;
     engine.setChips(userSeat, START_CHIPS);
     updateProfile((p) => ({ ...p, chips: START_CHIPS }));
-    // Count the refill as starting chips so the session result stays honest.
-    setSession((ss) => ({ ...ss, startChips: ss.startChips + added }));
+    // Free chips are tracked apart from the result, so they never count as profit.
+    setSession((ss) => addRefill(ss, before, START_CHIPS));
     setPendingBet(Math.min(profile.lastBet, START_CHIPS));
     setMessage('קיבלת 1,000 צ׳יפים וירטואליים חדשים.');
     refresh();
@@ -305,12 +333,7 @@ export function useTableController(mode: GameMode, occupants: Record<number, Occ
       setStage('dealing');
       engine.decideInsurance(userSeat, take);
       updateStats((s) => recordInsurance(s, take));
-      setSession((ss) => ({
-        ...ss,
-        decisions: ss.decisions + 1,
-        correct: ss.correct + (take ? 0 : 1),
-        mistakes: ss.mistakes + (take ? 1 : 0),
-      }));
+      setSession((ss) => addInsuranceDecision(ss, take));
       if (take) playSound('chip');
       refresh();
       void runUntilUser();
@@ -361,14 +384,7 @@ export function useTableController(mode: GameMode, occupants: Record<number, Occ
             source: 'table',
           }),
         );
-        setSession((ss) => ({
-          ...ss,
-          decisions: ss.decisions + 1,
-          correct: ss.correct + (grade === 'correct' ? 1 : 0),
-          minor: ss.minor + (grade === 'minor' ? 1 : 0),
-          mistakes: ss.mistakes + (grade === 'mistake' ? 1 : 0),
-          mistakeList: grade === 'correct' ? ss.mistakeList : [...ss.mistakeList, record],
-        }));
+        setSession((ss) => addDecision(ss, record));
       }
 
       if (mode === 'practice' && grade !== 'correct') {
@@ -407,6 +423,37 @@ export function useTableController(mode: GameMode, occupants: Record<number, Occ
     );
     return { ...session, endChips: engine.getSeat(userSeat).chips };
   }, [updateStats, mode, session, engine, userSeat]);
+
+  // ---------- saving the table (refresh-safe) ----------
+
+  useEffect(() => {
+    if (!persist || !onSave) return;
+    onSave({
+      v: 1,
+      savedAt: Date.now(),
+      mode,
+      occupants,
+      userSeat,
+      engine: engine.serialize(),
+      stage,
+      pendingBet,
+      feedback,
+      summary,
+      session,
+      message,
+      hideTipsSession,
+      roundDecisions: roundDecisions.current,
+      insuranceTaken: insuranceTaken.current,
+      gradedPoints: [...gradedPoints.current],
+    });
+  }, [persist, onSave, mode, occupants, userSeat, engine, snap, stage, pendingBet, feedback, summary, session, message, hideTipsSession]);
+
+  // A game restored in the middle of dealing, a virtual player's turn or the
+  // dealer's turn simply carries on from where it stopped.
+  useEffect(() => {
+    if (restore && IN_FLIGHT.includes(restore.stage)) void runUntilUser();
+    // Runs once, for the restored state only.
+  }, []);
 
   const userHandTotals = (snap.seats[userSeat]?.hands ?? []).map((h) => handValue(h.cards));
 

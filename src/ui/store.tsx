@@ -15,6 +15,7 @@ export interface Toast {
 }
 
 interface Store {
+  storage: StorageAdapter;
   profile: Profile;
   updateProfile: (fn: (p: Profile) => Profile) => void;
   updateStats: (fn: (s: Stats) => Stats) => void;
@@ -78,8 +79,8 @@ export function StoreProvider({ children, storage }: { children: ReactNode; stor
   }, []);
 
   const value = useMemo(
-    () => ({ profile, updateProfile, updateStats, updateSettings, resetProgress, toasts, toast, dismissToast }),
-    [profile, updateProfile, updateStats, updateSettings, resetProgress, toasts, toast, dismissToast],
+    () => ({ storage: adapter, profile, updateProfile, updateStats, updateSettings, resetProgress, toasts, toast, dismissToast }),
+    [adapter, profile, updateProfile, updateStats, updateSettings, resetProgress, toasts, toast, dismissToast],
   );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

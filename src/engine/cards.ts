@@ -81,6 +81,13 @@ export function buildDecks(deckCount: number): Card[] {
   return cards;
 }
 
+export interface ShoeState {
+  cards: Card[];
+  position: number;
+  cutIndex: number;
+  shuffleCount: number;
+}
+
 /**
  * A logical shoe: decks are built, shuffled once, and cards are drawn in order.
  * When the cut card is reached the shoe asks to be reshuffled before the next round.
@@ -126,6 +133,19 @@ export class Shoe {
 
   get total(): number {
     return this.cards.length;
+  }
+
+  /** Plain data for saving a game in progress. */
+  toState(): ShoeState {
+    return { cards: this.cards.map((c) => ({ ...c })), position: this.position, cutIndex: this.cutIndex, shuffleCount: this.shuffleCount };
+  }
+
+  loadState(s: ShoeState): void {
+    if (!Array.isArray(s.cards) || s.position < 0 || s.position > s.cards.length) throw new Error('invalid shoe');
+    this.cards = s.cards.map((c) => ({ ...c }));
+    this.position = s.position;
+    this.cutIndex = s.cutIndex;
+    this.shuffleCount = s.shuffleCount;
   }
 
   /** Test helper: put specific cards on top of the shoe, in draw order. */

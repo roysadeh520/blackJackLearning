@@ -1,7 +1,7 @@
 // The table engine: seats, betting, dealing, player actions, dealer play and settlement.
 // It is UI-agnostic and language-agnostic; the UI reads snapshots and formats text.
 
-import { Card, Rng, Shoe, handValue, isBlackjack, isPair, rankValue } from './cards';
+import { Card, Rng, Shoe, ShoeState, handValue, isBlackjack, isPair, rankValue } from './cards';
 import { DEFAULT_RULES, TableRules } from './rules';
 
 export type Action = 'hit' | 'stand' | 'double' | 'split' | 'surrender';
@@ -86,6 +86,20 @@ export interface TableSnapshot {
   rules: TableRules;
 }
 
+/** Everything needed to rebuild an engine mid-round (e.g. after a page refresh). */
+export interface EngineState {
+  v: 1;
+  seats: Seat[];
+  dealer: DealerState;
+  phase: Phase;
+  active: ActivePosition | null;
+  roundNumber: number;
+  shuffledThisRound: boolean;
+  events: RoundEvent[];
+  handIdSeq: number;
+  shoe: ShoeState;
+}
+
 export const SEAT_COUNT = 7;
 
 export class EngineError extends Error {}
@@ -120,6 +134,39 @@ export class BlackjackEngine {
     this.rules = rules;
     this.shoe = new Shoe(rules.decks, rules.penetration, rng);
     this.seats = Array.from({ length: SEAT_COUNT }, (_, i) => emptySeat(i));
+  }
+
+  // ---------- persistence ----------
+
+  serialize(): EngineState {
+    return structuredClone({
+      v: 1 as const,
+      seats: this.seats,
+      dealer: this.dealer,
+      phase: this.phase,
+      active: this.active,
+      roundNumber: this.roundNumber,
+      shuffledThisRound: this.shuffledThisRound,
+      events: this.events,
+      handIdSeq: this.handIdSeq,
+      shoe: this.shoe.toState(),
+    });
+  }
+
+  static restore(state: EngineState, rules: TableRules = DEFAULT_RULES, rng?: Rng): BlackjackEngine {
+    if (state?.v !== 1 || !Array.isArray(state.seats) || state.seats.length !== SEAT_COUNT) throw new EngineError('מצב שמור לא תקין');
+    const e = new BlackjackEngine(rules, rng);
+    const s = structuredClone(state);
+    e.shoe.loadState(s.shoe);
+    e.seats = s.seats;
+    e.dealer = s.dealer;
+    e.phase = s.phase;
+    e.active = s.active;
+    e.roundNumber = s.roundNumber;
+    e.shuffledThisRound = s.shuffledThisRound;
+    e.events = s.events;
+    e.handIdSeq = s.handIdSeq;
+    return e;
   }
 
   // ---------- seating ----------

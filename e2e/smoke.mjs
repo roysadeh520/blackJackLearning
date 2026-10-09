@@ -172,6 +172,16 @@ try {
   if (handsBefore !== handsAfter || !(await page.locator('.seat-user').isVisible())) problems.push(`game reset after visiting chart: ${handsBefore} -> ${handsAfter}`);
   else log(`returned to the same game after visiting the chart (hands: ${handsAfter})`);
   await playHands(page, 1, 'desktop-practice-resumed', 99);
+
+  // A page refresh returns to the same table and the same game stats.
+  const tableText = () => page.evaluate(() => [...document.querySelectorAll('.seat-user .pcard, .dealer-cards .pcard')].map((c) => c.getAttribute('aria-label')).join(','));
+  const beforeReload = { cards: await tableText(), hands: await page.locator('.mini-stats dd').first().innerText() };
+  await page.reload();
+  await page.locator('.seat-user').waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const afterReload = { cards: await tableText(), hands: await page.locator('.mini-stats dd').first().innerText().catch(() => '') };
+  if (JSON.stringify(beforeReload) !== JSON.stringify(afterReload))
+    problems.push(`refresh lost the game: ${JSON.stringify(beforeReload)} -> ${JSON.stringify(afterReload)}`);
+  else log(`refresh kept the game (hands: ${afterReload.hands})`);
   // Asking for another mode mid-game offers to resume instead of resetting.
   await page.goto(`${BASE}#/play?mode=learn`);
   await page.getByRole('button', { name: 'חזרה למשחק' }).click();

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { loadActiveGame } from './ui/activeGame';
 import { Layout } from './ui/components/Layout';
+import { useStore } from './ui/store';
 import { useRoute } from './ui/router';
 import { ChartScreen } from './ui/screens/ChartScreen';
 import { HomeScreen } from './ui/screens/HomeScreen';
@@ -23,7 +25,8 @@ export function App() {
   const { path, params } = useRoute();
   // A running game stays mounted (hidden) while other screens are open,
   // so visiting the chart or progress never resets the table.
-  const [gameAlive, setGameAlive] = useState(false);
+  const { storage } = useStore();
+  const [gameAlive, setGameAlive] = useState(() => !!loadActiveGame(storage));
   const onPlay = path === '/play';
 
   useEffect(() => {

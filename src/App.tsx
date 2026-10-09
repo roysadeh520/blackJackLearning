@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Layout } from './ui/components/Layout';
 import { useRoute } from './ui/router';
 import { ChartScreen } from './ui/screens/ChartScreen';
@@ -21,6 +21,10 @@ const TITLES: Record<string, string> = {
 
 export function App() {
   const { path, params } = useRoute();
+  // A running game stays mounted (hidden) while other screens are open,
+  // so visiting the chart or progress never resets the table.
+  const [gameAlive, setGameAlive] = useState(false);
+  const onPlay = path === '/play';
 
   useEffect(() => {
     const t = TITLES[path];
@@ -30,7 +34,7 @@ export function App() {
   let screen;
   switch (path) {
     case '/play':
-      screen = <PlayScreen key={params.get('mode') ?? ''} initialMode={params.get('mode')} />;
+      screen = null;
       break;
     case '/quick': {
       const mistakes = params.get('mistakes') === '1';
@@ -52,5 +56,14 @@ export function App() {
     default:
       screen = <HomeScreen />;
   }
-  return <Layout path={path}>{screen}</Layout>;
+  return (
+    <Layout path={path} showResume={gameAlive && !onPlay}>
+      {(onPlay || gameAlive) && (
+        <div hidden={!onPlay}>
+          <PlayScreen requestedMode={onPlay ? params.get('mode') : null} visible={onPlay} onGameAliveChange={setGameAlive} />
+        </div>
+      )}
+      {screen}
+    </Layout>
+  );
 }

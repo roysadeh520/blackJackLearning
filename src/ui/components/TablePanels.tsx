@@ -117,14 +117,17 @@ interface ActionProps {
   recommended: Action | null;
   disabled: boolean;
   showHelp: boolean;
+  /** Short reminder of the situation, so the user need not look back at the table. */
+  context?: string;
   onAct: (a: Action) => void;
 }
 
-export function ActionPanel({ available, recommended, disabled, showHelp, onAct }: ActionProps) {
+export function ActionPanel({ available, recommended, disabled, showHelp, context, onAct }: ActionProps) {
   const [helpOpen, setHelpOpen] = useState(false);
   const shown = ACTION_ORDER.filter((a) => available.includes(a));
   return (
     <div className="panel action-panel">
+      {context && <p className="action-context">{context}</p>}
       <div className="action-row" role="group" aria-label="פעולות">
         {shown.map((a) => {
           const isRec = recommended === a;
@@ -187,6 +190,7 @@ interface CoachProps {
 
 export function CoachPanel({ rec, available, handTotalText, onDismiss, onNeverForThis, onHideAll }: CoachProps) {
   const [more, setMore] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const ex = explain(rec);
   return (
     <aside className="panel coach" aria-label="הסבר לפני ההחלטה" aria-live="polite">
@@ -208,9 +212,9 @@ export function CoachPanel({ rec, available, handTotalText, onDismiss, onNeverFo
         <span aria-hidden="true">💡 </span>
         {ex.headline}: <strong>{ACTION_LABEL[rec.action]}</strong>
       </p>
-      <p>{ex.short}</p>
+      <p className={more ? '' : 'coach-short'}>{ex.short}</p>
       {more && <p className="muted">{ex.detailed}</p>}
-      <div className="btn-row btn-row-wrap">
+      <div className="btn-row btn-row-wrap coach-actions">
         <button type="button" className="btn btn-gold" onClick={onDismiss}>
           הבנתי
         </button>
@@ -219,15 +223,26 @@ export function CoachPanel({ rec, available, handTotalText, onDismiss, onNeverFo
             הסבר נוסף
           </button>
         )}
-        <button type="button" className="btn btn-ghost" onClick={onDismiss}>
-          דלג על ההסבר
+        {/* On small screens the less common choices fold behind one button. */}
+        <button
+          type="button"
+          className="btn btn-ghost coach-more-btn"
+          aria-expanded={optionsOpen}
+          onClick={() => setOptionsOpen((o) => !o)}
+        >
+          {optionsOpen ? 'פחות אפשרויות' : 'אפשרויות נוספות'}
         </button>
-        <button type="button" className="btn btn-ghost" onClick={onNeverForThis}>
-          אל תציג הסבר כזה שוב
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={onHideAll}>
-          המשך בלי הסברים
-        </button>
+        <div className={`coach-extra ${optionsOpen ? 'open' : ''}`}>
+          <button type="button" className="btn btn-ghost" onClick={onDismiss}>
+            דלג על ההסבר
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onNeverForThis}>
+            אל תציג הסבר כזה שוב
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onHideAll}>
+            המשך בלי הסברים
+          </button>
+        </div>
       </div>
     </aside>
   );

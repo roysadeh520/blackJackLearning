@@ -105,6 +105,13 @@ async function playHands(page, n, tag, shotEvery = 99) {
   return seen;
 }
 
+/** Open the play screen for a mode; if a game is running, choose to start a new one. */
+async function openMode(page, mode) {
+  await page.goto(`${BASE}#/play?mode=${mode}`);
+  const conflict = page.getByRole('button', { name: 'התחל משחק חדש' });
+  if (await conflict.isVisible().catch(() => false)) await conflict.click();
+}
+
 const browser = await chromium.launch({ executablePath: EXEC });
 try {
   // ---------- desktop ----------
@@ -143,15 +150,33 @@ try {
   await assertHebrewOnly(page, 'game summary');
 
   // practice mode, alone at the table
-  await page.goto(`${BASE}#/play?mode=practice`);
+  await openMode(page, 'practice');
   await page.getByRole('radio', { name: 'רק אני' }).click();
   await page.getByRole('button', { name: 'המשך לבחירת מקום' }).click();
   await page.getByRole('button', { name: /מקום 1: מקום פנוי/ }).click();
   await page.getByRole('button', { name: 'התחל לשחק' }).click();
   await playHands(page, Math.ceil(HANDS / 2), 'desktop-practice', 99);
 
+  // Visiting the decision chart mid-game must not reset the table.
+  const handsBefore = await page.locator('.mini-stats dd').first().innerText();
+  await page.getByRole('link', { name: 'טבלת החלטות' }).first().click();
+  await page.waitForURL(/#\/chart/);
+  await page.getByRole('tab', { name: 'יד עם אס' }).click();
+  await page.getByRole('link', { name: 'חזרה למשחק' }).click();
+  await page.waitForURL(/#\/play$/);
+  await page.locator('.seat-user').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  const handsAfter = await page.locator('.mini-stats dd').first().innerText();
+  if (handsBefore !== handsAfter || !(await page.locator('.seat-user').isVisible())) problems.push(`game reset after visiting chart: ${handsBefore} -> ${handsAfter}`);
+  else log(`returned to the same game after visiting the chart (hands: ${handsAfter})`);
+  await playHands(page, 1, 'desktop-practice-resumed', 99);
+  // Asking for another mode mid-game offers to resume instead of resetting.
+  await page.goto(`${BASE}#/play?mode=learn`);
+  await page.getByRole('button', { name: 'חזרה למשחק' }).click();
+  await page.locator('.seat-user').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+  if (!(await page.locator('.seat-user').isVisible())) problems.push('resume from mode prompt failed');
+
   // free mode with 7 players
-  await page.goto(`${BASE}#/play?mode=free`);
+  await openMode(page, 'free');
   await page.getByRole('radio', { name: 'אני ועוד שישה שחקנים' }).click();
   await page.getByRole('button', { name: 'המשך לבחירת מקום' }).click();
   await page.getByRole('button', { name: /מקום 7: מקום פנוי/ }).click();

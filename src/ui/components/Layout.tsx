@@ -9,7 +9,7 @@ const NAV = [
   { to: '/settings', label: 'הגדרות', icon: '⚙️' },
 ];
 
-export function Layout({ children, path }: { children: ReactNode; path: string }) {
+export function Layout({ children, path, showResume }: { children: ReactNode; path: string; showResume?: boolean }) {
   const { profile, toasts, dismissToast } = useStore();
   return (
     <div className="app">
@@ -34,6 +34,16 @@ export function Layout({ children, path }: { children: ReactNode; path: string }
           <span>{formatChips(profile.chips)}</span>
         </div>
       </header>
+      {showResume && (
+        <div className="resume-bar" role="region" aria-label="משחק פעיל">
+          <span>
+            <span aria-hidden="true">🃏 </span>יש לך משחק פעיל — הוא שמור בדיוק איפה שעצרת.
+          </span>
+          <a className="btn btn-gold btn-small" href="#/play">
+            חזרה למשחק
+          </a>
+        </div>
+      )}
       <main id="main" tabIndex={-1}>
         {children}
       </main>

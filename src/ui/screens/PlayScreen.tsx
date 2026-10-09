@@ -32,18 +32,37 @@ function isMode(m: string | null): m is GameMode {
   return m === 'learn' || m === 'practice' || m === 'free';
 }
 
-export function PlayScreen({ initialMode }: { initialMode: string | null }) {
+interface PlayScreenProps {
+  /** Mode asked for by the URL (null when just returning to the table). */
+  requestedMode: string | null;
+  /** False while the user visits another screen; the game keeps its state. */
+  visible: boolean;
+  onGameAliveChange: (alive: boolean) => void;
+}
+
+export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlayScreenProps) {
   const { profile, updateProfile } = useStore();
-  const [mode, setMode] = useState<GameMode>(isMode(initialMode) ? initialMode : 'learn');
+  const [mode, setMode] = useState<GameMode>(isMode(requestedMode) ? requestedMode : 'learn');
   const [players, setPlayers] = useState(Math.min(Math.max(profile.lastPlayers, 1), SEAT_COUNT));
   const [step, setStep] = useState<'setup' | 'seat' | 'play'>('setup');
   const [userSeat, setUserSeat] = useState<number | null>(null);
   const [occupants, setOccupants] = useState<Record<number, Occupant>>({});
   const [gameKey, setGameKey] = useState(0);
+  /** A different mode was requested while a game is running. */
+  const [conflictMode, setConflictMode] = useState<GameMode | null>(null);
 
   useEffect(() => {
-    if (isMode(initialMode)) setMode(initialMode);
-  }, [initialMode]);
+    if (!isMode(requestedMode)) return;
+    if (step === 'play') {
+      if (requestedMode !== mode) setConflictMode(requestedMode);
+    } else setMode(requestedMode);
+    // Only react to a new request, not to the step changing.
+  }, [requestedMode]);
+
+  useEffect(() => {
+    onGameAliveChange(step === 'play');
+  }, [step, onGameAliveChange]);
+  useEffect(() => () => onGameAliveChange(false), [onGameAliveChange]);
 
   const emptySnap = useMemo(() => new BlackjackEngine(DEFAULT_RULES).snapshot(), []);
   const previewSnap = useMemo(() => {
@@ -157,13 +176,55 @@ export function PlayScreen({ initialMode }: { initialMode: string | null }) {
   }
 
   return (
-    <GameTable
-      key={gameKey}
-      mode={mode}
-      occupants={occupants}
-      userSeat={userSeat!}
-      onNewGame={() => setStep('setup')}
-    />
+    <>
+      <GameTable
+        key={gameKey}
+        mode={mode}
+        occupants={occupants}
+        userSeat={userSeat!}
+        visible={visible}
+        onNewGame={() => setStep('setup')}
+      />
+      {conflictMode && visible && (
+        <Modal
+          title="יש לך משחק פעיל"
+          onClose={() => {
+            setConflictMode(null);
+            navigate('/play');
+          }}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn btn-gold"
+                data-autofocus
+                onClick={() => {
+                  setConflictMode(null);
+                  navigate('/play');
+                }}
+              >
+                חזרה למשחק
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => {
+                  setMode(conflictMode);
+                  setConflictMode(null);
+                  setStep('setup');
+                }}
+              >
+                התחל משחק חדש
+              </button>
+            </>
+          }
+        >
+          <p>
+            אתה באמצע {MODE_LABEL[mode]}. אפשר לחזור אליו בדיוק מאיפה שעצרת, או לסיים אותו ולהתחיל {MODE_LABEL[conflictMode]} חדש.
+          </p>
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -173,10 +234,11 @@ interface GameTableProps {
   mode: GameMode;
   occupants: Record<number, Occupant>;
   userSeat: number;
+  visible: boolean;
   onNewGame: () => void;
 }
 
-function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
+function GameTable({ mode, occupants, userSeat, visible, onNewGame }: GameTableProps) {
   const { profile, updateSettings } = useStore();
   const settings = profile.settings;
   const c = useTableController(mode, occupants, userSeat);
@@ -209,7 +271,7 @@ function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
   // Keyboard shortcuts for actions.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (c.stage !== 'userTurn' || c.feedback?.pending || historyOpen || gameOver) return;
+      if (!visible || c.stage !== 'userTurn' || c.feedback?.pending || historyOpen || gameOver) return;
       if (e.target instanceof HTMLInputElement || e.altKey || e.ctrlKey || e.metaKey) return;
       const a = (Object.keys(ACTION_KEY) as (keyof typeof ACTION_KEY)[]).find((k) => ACTION_KEY[k] === e.key);
       if (a && c.availableActions.includes(a)) {
@@ -219,12 +281,50 @@ function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [c, historyOpen, gameOver]);
+  }, [c, historyOpen, gameOver, visible]);
 
   const finish = () => {
     ended.current = true;
     setGameOver(c.endGame());
   };
+
+  // The controls bar sticks to the bottom of the screen; publish its height so the
+  // user's seat can scroll into view just above it.
+  const controlsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = controlsRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty('--controls-h', `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      document.documentElement.style.removeProperty('--controls-h');
+    };
+  }, []);
+
+  // When a decision is needed, bring the user's hand into view just above the bar.
+  const needsInput = c.stage === 'userTurn' || c.stage === 'insurance' || c.stage === 'summary';
+  useEffect(() => {
+    if (!needsInput || !visible) return;
+    const raf = requestAnimationFrame(() => {
+      const seat = document.querySelector<HTMLElement>('.seat-user');
+      const bar = controlsRef.current;
+      if (!seat || !bar) return;
+      const r = seat.getBoundingClientRect();
+      const top = 70; // below the sticky top bar
+      const bottom = window.innerHeight - bar.offsetHeight - 8;
+      if (r.bottom <= bottom && r.top >= top) return;
+      // Align the hand's bottom with the bar; if it is too tall, align its top instead.
+      const delta = r.height > bottom - top ? r.top - top : r.bottom - bottom;
+      window.scrollBy({ top: delta, behavior: settings.animations === 'reduced' ? 'auto' : 'smooth' });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [needsInput, visible, c.stage, active?.hand, showCoach, !!c.feedback, settings.animations]);
+
+  const actionContext =
+    rec && userHand
+      ? `${(c.snap.seats[userSeat]?.hands.length ?? 0) > 1 ? `יד ${active!.hand + 1} · ` : ''}היד שלך: ${totalText(userHand.cards)} · הדילר מציג: ${upName(rec.situation.up)}`
+      : undefined;
 
   const betweenHands = c.stage === 'betting' || c.stage === 'summary';
   const per = settings.animations === 'reduced' ? 0 : 230 * { normal: 1, fast: 0.5, veryFast: 0.2 }[settings.speed];
@@ -238,6 +338,9 @@ function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
           {c.stage !== 'betting' ? c.message : ''}
         </span>
         <div className="table-bar-actions">
+          <a className="btn btn-small btn-outline" href="#/chart" title="המשחק יישמר ותוכל לחזור אליו">
+            טבלת החלטות
+          </a>
           <button type="button" className="btn btn-small btn-outline" onClick={() => setHistoryOpen(true)} disabled={!c.snap.events.length}>
             היסטוריית הסיבוב
           </button>
@@ -264,7 +367,7 @@ function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
             pendingBet={c.pendingBet}
           />
 
-          <div className="controls">
+          <div className="controls" ref={controlsRef}>
             {c.stage === 'betting' && (
               <BettingPanel
                 chips={c.userChips}
@@ -304,7 +407,7 @@ function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
               />
             )}
 
-            {c.feedback && mode !== 'free' && (
+            {c.feedback && mode !== 'free' && c.stage !== 'summary' && (
               <FeedbackPanel
                 key={`${c.feedback.rec.situation.key}-${c.feedback.chosen}-${c.feedback.pending}`}
                 feedback={c.feedback}
@@ -321,6 +424,7 @@ function GameTable({ mode, occupants, userSeat, onNewGame }: GameTableProps) {
                 recommended={highlight}
                 disabled={false}
                 showHelp={mode !== 'free'}
+                context={actionContext}
                 onAct={c.act}
               />
             )}
@@ -425,10 +529,10 @@ function GameSummaryModal({
           <button type="button" className="btn btn-gold" onClick={onNewGame} data-autofocus>
             משחק חדש
           </button>
-          <button type="button" className="btn btn-outline" onClick={() => navigate('/progress')}>
+          <button type="button" className="btn btn-outline" onClick={() => { onNewGame(); navigate('/progress'); }}>
             ההתקדמות שלי
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => navigate('/')}>
+          <button type="button" className="btn btn-ghost" onClick={() => { onNewGame(); navigate('/'); }}>
             למסך הבית
           </button>
         </>

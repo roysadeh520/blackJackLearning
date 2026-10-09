@@ -182,11 +182,48 @@ try {
   if (JSON.stringify(beforeReload) !== JSON.stringify(afterReload))
     problems.push(`refresh lost the game: ${JSON.stringify(beforeReload)} -> ${JSON.stringify(afterReload)}`);
   else log(`refresh kept the game (hands: ${afterReload.hands})`);
+
+
   // Asking for another mode mid-game offers to resume instead of resetting.
   await page.goto(`${BASE}#/play?mode=learn`);
   await page.getByRole('button', { name: 'חזרה למשחק' }).click();
   await page.locator('.seat-user').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
   if (!(await page.locator('.seat-user').isVisible())) problems.push('resume from mode prompt failed');
+
+  // Ending mid-hand voids the hand and refunds its bet.
+  const bankroll = async () => Number((await page.locator('.bankroll').innerText()).replace(/[^0-9.]/g, ''));
+  for (let i = 0; i < 200 && !(await page.locator('.action-panel').isVisible()); i++) {
+    if (await page.locator('.betting-panel').isVisible()) {
+      if ((await page.locator('.bet-amount').innerText()).trim() === '0') await page.locator('.chip-btn:not([disabled])').first().click();
+      await page.getByRole('button', { name: 'אשר הימור' }).click();
+    } else if (await page.locator('.summary-panel').isVisible()) await page.getByRole('button', { name: 'יד חדשה' }).click();
+    else if (await page.locator('.insurance-panel').isVisible()) await page.getByRole('button', { name: 'ללא ביטוח' }).click();
+    else if (await page.getByRole('button', { name: /^המשך \(/ }).isVisible().catch(() => false)) await page.getByRole('button', { name: /^המשך \(/ }).click();
+    else await page.waitForTimeout(100);
+  }
+  const chipsBeforeHand = await bankroll();
+  await page.getByRole('button', { name: 'סיים משחק' }).click();
+  await page.getByRole('button', { name: 'כן, סיים משחק' }).click();
+  await page.getByText('היד שהייתה באמצע בוטלה').waitFor();
+  const endRow = await page.locator('.summary-stats div').filter({ hasText: 'צ׳יפים בסיום' }).innerText();
+  if (Number(endRow.replace(/[^0-9.]/g, '')) !== chipsBeforeHand) problems.push(`mid-hand end did not refund: ${chipsBeforeHand} vs ${endRow}`);
+  else log(`ended mid-hand; bet refunded (chips ${chipsBeforeHand})`);
+  await page.screenshot({ path: `${SHOTS}/desktop-end-midhand.png` });
+  await page.getByRole('button', { name: 'סגור' }).click();
+  if (await page.locator('.seat-user').isVisible().catch(() => false)) problems.push('closing the game summary went back to the old game');
+
+  // Ending from the "back to the game" bar while on another screen.
+  await page.getByRole('radio', { name: 'רק אני' }).click();
+  await page.getByRole('button', { name: 'המשך לבחירת מקום' }).click();
+  await page.locator('.seat-pick').first().click();
+  await page.getByRole('button', { name: 'התחל לשחק' }).click();
+  await page.goto(`${BASE}#/chart`);
+  await page.locator('.resume-bar').getByRole('link', { name: 'סיים משחק' }).click();
+  await page.getByRole('dialog', { name: 'סיכום המשחק' }).waitFor();
+  await page.getByRole('button', { name: 'למסך הבית' }).click();
+  await page.waitForTimeout(300);
+  if (await page.locator('.resume-bar').count()) problems.push('resume bar still shown after ending the game');
+  else log('ended the game from the resume bar; no active game left');
 
   // free mode with 7 players
   await openMode(page, 'free');
@@ -226,11 +263,33 @@ try {
   await page.screenshot({ path: `${SHOTS}/desktop-progress.png`, fullPage: true });
   await assertHebrewOnly(page, 'progress');
 
-  const mistakesLink = page.getByRole('link', { name: 'תרגל את הטעויות שלי' });
-  if ((await mistakesLink.getAttribute('aria-disabled')) === 'false') {
+  const mistakesLink = page.getByRole('link', { name: /תרגל את הטעויות שלי/ });
+  const openCount = async () => Number(((await mistakesLink.innerText()).match(/\((\d+)\)/) ?? [0, 0])[1]);
+  const openBefore = await openCount();
+  if (openBefore > 0) {
     await mistakesLink.click();
     await page.locator('.quick-actions').waitFor();
     await page.screenshot({ path: `${SHOTS}/desktop-mistakes.png`, fullPage: true });
+    // Learn the right answer when it is revealed, then use it when the situation comes back.
+    const known = new Map();
+    let fixedNow = 0;
+    for (let i = 0; i < 40 && fixedNow < 2; i++) {
+      if (!(await page.locator('.quick-actions').count())) break;
+      const situation = (await page.locator('.quick-side h2').allInnerTexts()).join('|');
+      const label = known.get(situation);
+      const btn = label
+        ? page.locator('.quick-actions .btn-action').filter({ hasText: label })
+        : page.locator('.quick-actions .btn-action:not([disabled])').first();
+      await btn.first().click();
+      if (await page.locator('.feedback.fb-correct').count()) fixedNow++;
+      else known.set(situation, (await page.locator('.quick-actions .is-answer .act-label').innerText()).trim());
+      const next = page.getByRole('button', { name: /^(המשך|סיום)$/ });
+      if (await next.count()) await next.click();
+    }
+    await page.goto(`${BASE}#/progress`);
+    const openAfter = await openCount();
+    if (openAfter !== openBefore - fixedNow) problems.push(`mistakes not cleared: ${openBefore} - ${fixedNow} != ${openAfter}`);
+    else log(`mistakes practice: ${fixedNow} fixed, open ${openBefore} -> ${openAfter}`);
   }
 
   await page.goto(`${BASE}#/lesson`);

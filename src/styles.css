@@ -2721,3 +2721,25 @@ kbd {
     font-size: 0.88rem;
   }
 }
+
+.fixed-mistakes {
+  margin-top: 16px;
+}
+.fixed-mistakes summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--ok);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.mistake-list li.is-fixed {
+  opacity: 0.85;
+}
+.mistake-list li.is-fixed span:first-child {
+  color: var(--ok);
+}
+.resume-actions {
+  display: inline-flex;
+  gap: 8px;
+}

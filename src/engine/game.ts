@@ -608,6 +608,27 @@ export class BlackjackEngine {
     return { outcome: 'lose', payout: 0 };
   }
 
+  /**
+   * Void the round in progress: every stake (bets, doubles, splits, insurance)
+   * goes back to its owner and the table returns to betting. Used when a player
+   * ends the game in the middle of a hand.
+   */
+  cancelRound(): void {
+    if (this.phase === 'idle' || this.phase === 'roundOver') return;
+    for (const seat of this.playingSeats()) {
+      seat.chips += seat.hands.reduce((sum, h) => sum + h.bet, 0) + seat.insuranceBet;
+      seat.hands = [];
+      seat.inRound = false;
+      seat.insuranceBet = 0;
+      seat.insuranceDecided = true;
+      seat.lastAction = undefined;
+    }
+    this.dealer = { cards: [], holeHidden: true };
+    this.active = null;
+    this.events = [];
+    this.phase = 'idle';
+  }
+
   /** Net chip result of the last round for a seat (after settlement). */
   netForSeat(index: number): number {
     const seat = this.seats[index];

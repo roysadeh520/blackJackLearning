@@ -39,9 +39,14 @@ export function Layout({ children, path, showResume }: { children: ReactNode; pa
           <span>
             <span aria-hidden="true">🃏 </span>יש לך משחק פעיל — הוא שמור בדיוק איפה שעצרת.
           </span>
-          <a className="btn btn-gold btn-small" href="#/play">
-            חזרה למשחק
-          </a>
+          <span className="resume-actions">
+            <a className="btn btn-gold btn-small" href="#/play">
+              חזרה למשחק
+            </a>
+            <a className="btn btn-outline btn-small" href="#/play?end=1">
+              סיים משחק
+            </a>
+          </span>
         </div>
       )}
       <main id="main" tabIndex={-1}>

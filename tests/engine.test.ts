@@ -243,3 +243,21 @@ describe('engine rounds', () => {
     expect(shuffles).toBeGreaterThan(5);
   });
 });
+
+describe('ending a game mid-hand', () => {
+  it('cancelRound refunds bets, doubles, splits and insurance', () => {
+    // player 8, dealer A (up), player 8, dealer 7 (hole) -> insurance offered, no dealer blackjack
+    const e = setup(['8', 'A', '8', '7', '3', '10', '2']);
+    e.startRound({ 3: 50 });
+    e.decideInsurance(3, true);
+    e.act('split'); // first hand 8+3
+    e.act('double'); // first hand doubled
+    expect(e.getSeat(3).chips).toBe(1000 - 50 - 25 - 50 - 50);
+    e.cancelRound();
+    expect(e.getSeat(3).chips).toBe(1000);
+    expect(e.getPhase()).toBe('idle');
+    expect(e.snapshot().dealer.cards).toHaveLength(0);
+    e.startRound({ 3: 10 }); // the table works normally afterwards
+    expect(e.getPhase()).not.toBe('idle');
+  });
+});

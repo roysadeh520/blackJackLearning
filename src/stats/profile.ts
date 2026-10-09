@@ -35,6 +35,12 @@ export interface MistakeEntry {
   /** Correct answers given later for the same situation. */
   fixes: number;
   lastSeen: number;
+  /**
+   * True once the situation was answered correctly after the mistake: it leaves
+   * the practice queue but stays in the history. A new mistake reopens it.
+   */
+  resolved?: boolean;
+  resolvedAt?: number;
 }
 
 export interface SessionRecord {
@@ -152,6 +158,10 @@ export function normalizeProfile(raw: Partial<Profile> | undefined): Profile {
   if (!raw || typeof raw !== 'object') return base;
   const stats = { ...emptyStats(), ...(raw.stats ?? {}) } as Stats;
   stats.byCategory = { ...emptyStats().byCategory, ...(raw.stats?.byCategory ?? {}) };
+  // Older saves had no `resolved` flag: a mistake answered correctly since then counts as fixed.
+  for (const m of Object.values(stats.mistakesBank ?? {})) {
+    if (m.resolved === undefined) m.resolved = m.fixes > 0;
+  }
   return {
     ...base,
     ...raw,
@@ -211,10 +221,15 @@ export function recordDecision(stats: Stats, d: DecisionRecord): Stats {
       misses: (existing?.misses ?? 0) + 1,
       fixes: existing?.fixes ?? 0,
       lastSeen: Date.now(),
+      resolved: false,
     };
   } else if (existing) {
     existing.fixes++;
     existing.lastSeen = Date.now();
+    if (!existing.resolved) {
+      existing.resolved = true;
+      existing.resolvedAt = Date.now();
+    }
   }
   return s;
 }
@@ -258,13 +273,18 @@ export function recordSession(stats: Stats, rec: SessionRecord): Stats {
   return s;
 }
 
-/** Mistakes ordered by how much practice they need. */
+/** Open mistakes, the ones missed most (and most recently) first. */
 export function mistakesToPractice(stats: Stats): MistakeEntry[] {
   return Object.values(stats.mistakesBank)
-    .map((m) => ({ m, weight: m.misses * 2 - m.fixes }))
-    .filter((x) => x.weight > 0)
-    .sort((a, b) => b.weight - a.weight || b.m.lastSeen - a.m.lastSeen)
-    .map((x) => x.m);
+    .filter((m) => !m.resolved)
+    .sort((a, b) => b.misses - a.misses || b.lastSeen - a.lastSeen);
+}
+
+/** Mistakes the user has since answered correctly, newest first. */
+export function resolvedMistakes(stats: Stats): MistakeEntry[] {
+  return Object.values(stats.mistakesBank)
+    .filter((m) => m.resolved)
+    .sort((a, b) => (b.resolvedAt ?? 0) - (a.resolvedAt ?? 0));
 }
 
 export function accuracy(stats: Pick<Stats, 'decisions' | 'correct'>): number {

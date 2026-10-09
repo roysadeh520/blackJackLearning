@@ -410,7 +410,28 @@ export function useTableController(
 
   // ---------- session end ----------
 
+  /** The game can be ended whenever the table is waiting for the user. */
+  const roundInProgress = stage === 'userTurn' || stage === 'insurance';
+  const canEnd = roundInProgress || stage === 'betting' || stage === 'summary';
+
   const endGame = useCallback(() => {
+    // Mid-hand, the hand is voided and every stake goes back to the player, so the
+    // chips and the game result stay exact. Decisions already made stay recorded.
+    let cancelledHand = false;
+    if (stage === 'userTurn' || stage === 'insurance') {
+      engine.cancelRound();
+      cancelledHand = true;
+      roundDecisions.current = [];
+      insuranceTaken.current = null;
+      gradedPoints.current.clear();
+      setFeedback(null);
+      setSummary(null);
+      setStage('betting');
+      setMessage('היד בוטלה וההימור הוחזר אליך.');
+      const chips = engine.getSeat(userSeat).chips;
+      updateProfile((p) => ({ ...p, chips }));
+      refresh();
+    }
     updateStats((s) =>
       recordSession(s, {
         date: Date.now(),
@@ -421,8 +442,8 @@ export function useTableController(
         net: session.net,
       }),
     );
-    return { ...session, endChips: engine.getSeat(userSeat).chips };
-  }, [updateStats, mode, session, engine, userSeat]);
+    return { ...session, endChips: engine.getSeat(userSeat).chips, cancelledHand };
+  }, [stage, updateStats, updateProfile, refresh, mode, session, engine, userSeat]);
 
   // ---------- saving the table (refresh-safe) ----------
 
@@ -484,6 +505,8 @@ export function useTableController(
     retry,
     dismissFeedback,
     endGame,
+    canEnd,
+    roundInProgress,
   };
 }
 

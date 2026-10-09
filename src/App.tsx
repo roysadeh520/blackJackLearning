@@ -63,7 +63,12 @@ export function App() {
     <Layout path={path} showResume={gameAlive && !onPlay}>
       {(onPlay || gameAlive) && (
         <div hidden={!onPlay}>
-          <PlayScreen requestedMode={onPlay ? params.get('mode') : null} visible={onPlay} onGameAliveChange={setGameAlive} />
+          <PlayScreen
+            requestedMode={onPlay ? params.get('mode') : null}
+            visible={onPlay}
+            endRequested={onPlay && params.get('end') === '1'}
+            onGameAliveChange={setGameAlive}
+          />
         </div>
       )}
       {screen}

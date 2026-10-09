@@ -8,6 +8,7 @@ import {
   recordDecision,
   recordHandResult,
   recordSession,
+  resolvedMistakes,
   unlockAchievements,
 } from '../src/stats/profile';
 import { MemoryStorageAdapter } from '../src/storage/storage';
@@ -39,13 +40,30 @@ describe('profile statistics', () => {
     expect(s.byCategory.hard).toEqual({ decisions: 3, correct: 2 });
   });
 
-  it('keeps a prioritised mistake bank that shrinks as the user fixes mistakes', () => {
+  it('drops a mistake from practice once it is answered correctly, and keeps it in history', () => {
     let s = emptyStats();
+    s = recordDecision(s, { ...dec(sixteenVsTen, 'stand'), playerCards: ['10', '6'], dealerUp: '10' });
     s = recordDecision(s, { ...dec(sixteenVsTen, 'stand'), playerCards: ['10', '6'], dealerUp: '10' });
     expect(mistakesToPractice(s)).toHaveLength(1);
     s = recordDecision(s, { ...dec(), playerCards: ['10', '6'], dealerUp: '10' });
-    s = recordDecision(s, { ...dec(), playerCards: ['10', '6'], dealerUp: '10' });
     expect(mistakesToPractice(s)).toHaveLength(0);
+    expect(resolvedMistakes(s)).toHaveLength(1);
+    expect(resolvedMistakes(s)[0].misses).toBe(2);
+    // a new mistake on the same situation reopens it
+    s = recordDecision(s, { ...dec(sixteenVsTen, 'stand'), playerCards: ['10', '6'], dealerUp: '10' });
+    expect(mistakesToPractice(s)).toHaveLength(1);
+  });
+
+  it('treats old saved mistakes that were answered correctly as fixed', () => {
+    const p = normalizeProfile({
+      stats: {
+        mistakesBank: {
+          a: { key: 'a', category: 'hard', playerCards: ['10', '6'], dealerUp: '10', recommended: 'hit', lastChosen: 'stand', misses: 2, fixes: 1, lastSeen: 1 },
+          b: { key: 'b', category: 'hard', playerCards: ['10', '2'], dealerUp: '3', recommended: 'hit', lastChosen: 'stand', misses: 1, fixes: 0, lastSeen: 1 },
+        },
+      } as never,
+    });
+    expect(mistakesToPractice(p.stats).map((m) => m.key)).toEqual(['b']);
   });
 
   it('records hands, sessions and achievements', () => {

@@ -39,10 +39,12 @@ interface PlayScreenProps {
   requestedMode: string | null;
   /** False while the user visits another screen; the game keeps its state. */
   visible: boolean;
+  /** The URL asked to end the running game (from the resume bar). */
+  endRequested: boolean;
   onGameAliveChange: (alive: boolean) => void;
 }
 
-export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlayScreenProps) {
+export function PlayScreen({ requestedMode, visible, endRequested, onGameAliveChange }: PlayScreenProps) {
   const { profile, updateProfile, storage } = useStore();
   // A table saved before a refresh is reopened exactly as it was.
   const [restore, setRestore] = useState<SavedTable | undefined>(() => loadActiveGame(storage));
@@ -203,6 +205,7 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
         userSeat={userSeat!}
         visible={visible}
         onFinishedChange={setFinished}
+        endRequested={endRequested}
         onNewGame={() => setStep('setup')}
       />
       {conflictMode && visible && (
@@ -250,6 +253,8 @@ export function PlayScreen({ requestedMode, visible, onGameAliveChange }: PlaySc
 
 // ---------------------------------------------------------------------------
 
+type GameResult = SessionStats & { endChips: number; cancelledHand: boolean };
+
 interface GameTableProps {
   restore?: SavedTable;
   mode: GameMode;
@@ -257,15 +262,18 @@ interface GameTableProps {
   userSeat: number;
   visible: boolean;
   onFinishedChange: (finished: boolean) => void;
+  /** "סיים משחק" was pressed outside the table (in the resume bar). */
+  endRequested: boolean;
   onNewGame: () => void;
 }
 
-function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChange, onNewGame }: GameTableProps) {
+function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChange, endRequested, onNewGame }: GameTableProps) {
   const { profile, updateSettings } = useStore();
   const settings = profile.settings;
   const { storage } = useStore();
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [gameOver, setGameOver] = useState<(SessionStats & { endChips: number }) | null>(null);
+  const [gameOver, setGameOver] = useState<GameResult | null>(null);
+  const [confirmEnd, setConfirmEnd] = useState(false);
   const onSave = useCallback((g: SavedTable) => saveActiveGame(storage, g), [storage]);
   // A game that was ended is not saved; closing its summary to play on saves it again.
   const c = useTableController(mode, occupants, userSeat, { restore, onSave, persist: !gameOver });
@@ -309,11 +317,22 @@ function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChan
   }, [c, historyOpen, gameOver, visible]);
 
   const finish = () => {
+    setConfirmEnd(false);
     ended.current = true;
     setGameOver(c.endGame());
     clearActiveGame(storage);
     onFinishedChange(true);
   };
+  // Mid-hand, ask first: the hand will be voided.
+  const requestEnd = () => (c.roundInProgress ? setConfirmEnd(true) : finish());
+
+  // Ending from the resume bar: wait until the table is waiting for the user, then end.
+  useEffect(() => {
+    if (!endRequested || !visible || gameOver || !c.canEnd) return;
+    navigate('/play');
+    requestEnd();
+    // requestEnd reads the latest controller state on each render.
+  }, [endRequested, visible, gameOver, c.canEnd]);
 
   // The controls bar sticks to the bottom of the screen; publish its height so the
   // user's seat can scroll into view just above it.
@@ -353,7 +372,6 @@ function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChan
       ? `${(c.snap.seats[userSeat]?.hands.length ?? 0) > 1 ? `יד ${active!.hand + 1} · ` : ''}היד שלך: ${totalText(userHand.cards)} · הדילר מציג: ${upName(rec.situation.up)}`
       : undefined;
 
-  const betweenHands = c.stage === 'betting' || c.stage === 'summary';
   const per = settings.animations === 'reduced' ? 0 : 230 * { normal: 1, fast: 0.5, veryFast: 0.2 }[settings.speed];
   const history = roundHistory(c.snap.events, userSeat, (c.snap.seats[userSeat]?.hands.length ?? 0) > 1);
 
@@ -374,9 +392,9 @@ function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChan
           <button
             type="button"
             className="btn btn-small btn-outline"
-            onClick={finish}
-            disabled={!betweenHands}
-            title={betweenHands ? undefined : 'אפשר לסיים את המשחק בין ידיים'}
+            onClick={requestEnd}
+            disabled={!c.canEnd}
+            title={c.canEnd ? undefined : 'רגע, היד מתנהלת...'}
           >
             סיים משחק
           </button>
@@ -519,16 +537,33 @@ function GameTable({ restore, mode, occupants, userSeat, visible, onFinishedChan
         </Modal>
       )}
 
+      {confirmEnd && (
+        <Modal
+          title="לסיים את המשחק עכשיו?"
+          onClose={() => setConfirmEnd(false)}
+          footer={
+            <>
+              <button type="button" className="btn btn-gold" onClick={finish} data-autofocus>
+                כן, סיים משחק
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirmEnd(false)}>
+                המשך לשחק
+              </button>
+            </>
+          }
+        >
+          <p>אתה באמצע יד. היד הזאת תבוטל וההימור שלה יוחזר אליך במלואו, כך שהיא לא תשפיע על הרווח או ההפסד.</p>
+          <p className="muted">ההחלטות שכבר קיבלת ביד הזאת נשמרות בהתקדמות שלך.</p>
+        </Modal>
+      )}
+
       {gameOver && (
         <GameSummaryModal
           mode={mode}
           stats={gameOver}
           onNewGame={onNewGame}
-          onClose={() => {
-            ended.current = false;
-            setGameOver(null);
-            onFinishedChange(false);
-          }}
+          // The game is over: closing the summary leads to a new game, never back to the old one.
+          onClose={onNewGame}
         />
       )}
     </div>
@@ -542,7 +577,7 @@ function GameSummaryModal({
   onClose,
 }: {
   mode: GameMode;
-  stats: SessionStats & { endChips: number };
+  stats: GameResult;
   onNewGame: () => void;
   onClose: () => void;
 }) {
@@ -580,6 +615,7 @@ function GameSummaryModal({
         <div><dt>צ׳יפים בסיום</dt><dd>{formatChips(stats.endChips)}</dd></div>
         <div><dt>רווח או הפסד</dt><dd className={net >= 0 ? 'pos' : 'neg'}>{formatSigned(net)}</dd></div>
       </dl>
+      {stats.cancelledHand && <p className="advice">היד שהייתה באמצע בוטלה וההימור שלה הוחזר אליך.</p>}
       {stats.decisions > 0 && stats.correct === stats.decisions && <p className="advice">🎯 משחק מושלם — כל ההחלטות שלך היו נכונות!</p>}
       {stats.mistakeList.length > 0 && (
         <>

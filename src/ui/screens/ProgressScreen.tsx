@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ACTION_LABEL, CATEGORY_LABEL, formatChips, formatSigned, MODE_LABEL, percent, RANK_NAME, upName } from '../../i18n/he';
 import { upValueOf } from '../../strategy/basicStrategy';
-import { ACHIEVEMENTS, mistakesToPractice, SessionRecord } from '../../stats/profile';
+import { ACHIEVEMENTS, MistakeEntry, mistakesToPractice, resolvedMistakes, SessionRecord } from '../../stats/profile';
 import { Modal } from '../components/Modal';
 import { useStore } from '../store';
 
@@ -25,6 +25,8 @@ export function ProgressScreen() {
   const s = profile.stats;
   const [confirmReset, setConfirmReset] = useState(false);
   const mistakes = mistakesToPractice(s);
+  const fixed = resolvedMistakes(s);
+  const situation = (m: MistakeEntry) => `${m.playerCards.map((r) => RANK_NAME[r]).join(' ו־')} מול ${upName(upValueOf(m.dealerUp))}`;
 
   const tiles = [
     { label: 'משחקים', value: s.games },
@@ -93,26 +95,45 @@ export function ProgressScreen() {
           <h2 id="mis-h">הטעויות שלי</h2>
           {mistakes.length ? (
             <>
-              <p className="muted">המצבים שבהם התקשית — הכי חשובים לתרגול מופיעים ראשונים.</p>
+              <p className="muted">מצבים שעוד צריך לתרגל — מה שטעית בו הכי הרבה מופיע ראשון. מצב שתענה עליו נכון יוצא מהתרגול.</p>
               <ul className="mistake-list">
                 {mistakes.slice(0, 8).map((m) => (
                   <li key={m.key}>
-                    <span>
-                      {m.playerCards.map((r) => RANK_NAME[r]).join(' ו־')} מול {upName(upValueOf(m.dealerUp))}
-                    </span>
+                    <span>{situation(m)}</span>
                     <span className="muted">
                       מומלץ: {ACTION_LABEL[m.recommended]} · טעויות: {m.misses}
                     </span>
                   </li>
                 ))}
               </ul>
+              {mistakes.length > 8 && <p className="muted">ועוד {mistakes.length - 8} מצבים.</p>}
             </>
           ) : (
-            <p className="muted">עדיין אין טעויות שמורות. כל מצב שבו תטעו יישמר כאן לתרגול.</p>
+            <p className="muted">
+              {fixed.length ? 'אין כרגע טעויות פתוחות — תיקנת את כולן. 👏' : 'עדיין אין טעויות שמורות. כל מצב שבו תטעו יישמר כאן לתרגול.'}
+            </p>
           )}
           <a className={`btn btn-gold btn-lg ${mistakes.length ? '' : 'disabled'}`} href="#/quick?mistakes=1" aria-disabled={!mistakes.length}>
-            תרגל את הטעויות שלי
+            תרגל את הטעויות שלי{mistakes.length ? ` (${mistakes.length})` : ''}
           </a>
+          {fixed.length > 0 && (
+            <details className="fixed-mistakes">
+              <summary>טעויות שתיקנת ({fixed.length})</summary>
+              <ul className="mistake-list">
+                {fixed.map((m) => (
+                  <li key={m.key} className="is-fixed">
+                    <span>
+                      <span aria-hidden="true">✓ </span>
+                      {situation(m)}
+                    </span>
+                    <span className="muted">
+                      {ACTION_LABEL[m.recommended]} · טעית {m.misses === 1 ? 'פעם אחת' : `${m.misses} פעמים`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </section>
       </div>
 

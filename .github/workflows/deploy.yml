@@ -36,3 +36,39 @@ jobs:
           git add -A
           git commit -q -m "Deploy ${GITHUB_SHA}"
           git push --force "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+
+  verify:
+    # Checks the live GitHub Pages site: it serves this build and a game can be played end to end.
+    needs: build-and-deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Wait for the published site to serve this build
+        run: |
+          URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          ASSET=$(grep -o 'assets/index-[^"]*\.js' dist/index.html)
+          echo "Waiting for $URL to serve $ASSET"
+          for i in $(seq 1 60); do
+            if curl -fsSL "$URL" | grep -q "$ASSET" && curl -fsS -o /dev/null "$URL$ASSET"; then
+              echo "Live site serves this build."; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$URL did not serve this build. Is GitHub Pages enabled (Settings → Pages → Branch: gh-pages)?"
+          exit 1
+      - name: Play the live site in Chrome
+        run: |
+          URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          CHROMIUM_PATH="$(command -v google-chrome || command -v chromium)" BASE_URL="$URL" node e2e/smoke.mjs --hands=6 --shots=screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-site-screenshots
+          path: screenshots
+          if-no-files-found: ignore
